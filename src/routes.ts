@@ -284,7 +284,7 @@ export function mountComfyUIRoutes(ctx: Context, runtime: ComfyUIRuntime): (() =
         // like a network problem with the address the user typed (Issue #11).
         sendJson(response, 200, {
           ok: false,
-          error: `${errorMessage(error)}（探测地址 ${runtime.getConfig().baseUrl}）`,
+          error: `${errorMessage(error)} (checked ${runtime.getConfig().baseUrl})`,
           latencyMs: Date.now() - startedAt,
         })
       }
@@ -845,13 +845,13 @@ export function mountComfyUIRoutes(ctx: Context, runtime: ComfyUIRuntime): (() =
       try {
         const raw = await readRawBody(request)
         if (raw.length === 0) {
-          sendJson(response, 200, { ok: false, error: '文件为空' })
+          sendJson(response, 200, { ok: false, error: 'File is empty' })
           return
         }
         // Cheap upper bound before the store's per-bucket check, so an oversized
         // upload is rejected on the size it actually has.
         if (raw.length > MAX_ASSET_BYTES) {
-          sendJson(response, 200, { ok: false, error: `单个文件不能超过 ${Math.floor(MAX_ASSET_BYTES / 1024 / 1024)} MB` })
+          sendJson(response, 200, { ok: false, error: `Each file must be at most ${Math.floor(MAX_ASSET_BYTES / 1024 / 1024)} MB` })
           return
         }
         const result = await runtime.skillPacks.importFile(id, name, raw, bucket)
@@ -888,7 +888,7 @@ export function mountComfyUIRoutes(ctx: Context, runtime: ComfyUIRuntime): (() =
       }
       const pack = await runtime.skillPacks.info(id)
       if (pack === undefined) {
-        sendJson(response, 200, { ok: false, error: '该工作流没有技能包' })
+        sendJson(response, 200, { ok: false, error: 'This workflow has no skill pack' })
         return
       }
       const opener = process.platform === 'win32'
@@ -1102,7 +1102,7 @@ export function mountComfyUIRoutes(ctx: Context, runtime: ComfyUIRuntime): (() =
       }
       const raw = await readRawBody(request)
       if (raw.length > MAX_IMPORT_BYTES) {
-        sendJson(response, 413, { error: `预设包不能超过 ${Math.floor(MAX_IMPORT_BYTES / 1024 / 1024)} MB` })
+        sendJson(response, 413, { error: `Preset archive must be at most ${Math.floor(MAX_IMPORT_BYTES / 1024 / 1024)} MB` })
         return
       }
       const result = analyzeImportPackage(raw)
@@ -1133,7 +1133,7 @@ export function mountComfyUIRoutes(ctx: Context, runtime: ComfyUIRuntime): (() =
         .filter((index) => Number.isInteger(index) && index >= 0)
       const raw = await readRawBody(request)
       if (raw.length > MAX_IMPORT_BYTES) {
-        sendJson(response, 413, { error: `预设包不能超过 ${Math.floor(MAX_IMPORT_BYTES / 1024 / 1024)} MB` })
+        sendJson(response, 413, { error: `Preset archive must be at most ${Math.floor(MAX_IMPORT_BYTES / 1024 / 1024)} MB` })
         return
       }
       try {

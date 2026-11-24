@@ -291,33 +291,33 @@ export async function apply(ctx: Context, entryConfig: Partial<Record<keyof Conf
       const analysis = analyzeGraph(graph)
       if (!analysis.ok) return { ok: false, error: analysis.error }
       if (analysis.components.length === 0) {
-        return { ok: false, error: '图里没有可执行的分量（所有节点都被绕过或悬空）' }
+        return { ok: false, error: 'The graph has no runnable components. All nodes are bypassed or disconnected.' }
       }
       const base = file.replace(/\.json$/i, '').slice(0, 40)
       const groupLabel = (component: { groups: string[] }): string =>
-        component.groups.length > 0 ? `（${component.groups.slice(0, 3).join('+')}）` : ''
+        component.groups.length > 0 ? ` (${component.groups.slice(0, 3).join('+')})` : ''
       const jobs: Array<{ name: string; description: string; includeNodeIds: Set<number> }> = []
       if (mode === 'all') {
         jobs.push({
           name: base,
-          description: `从 ComfyUI 图工作流 ${file} 整体提取：${analysis.components.length} 个分量合成一个运行工作流。`,
+          description: `Extracted ${analysis.components.length} components from the ComfyUI graph ${file} into one runnable workflow.`,
           includeNodeIds: new Set(analysis.components.flatMap((component) => component.nodeIds)),
         })
       } else if (mode === 'main') {
         const main = analysis.components[0]
         if (main === undefined) {
-          return { ok: false, error: '图里没有可提取的分量' }
+          return { ok: false, error: 'The graph has no component to extract.' }
         }
         jobs.push({
-          name: `${base} · 主流程`,
-          description: `从 ComfyUI 图工作流 ${file} 提取主流程（${main.size} 节点）${groupLabel(main)}。`,
+          name: `${base} · Main flow`,
+          description: `Extracted the main flow (${main.size} nodes) from the ComfyUI graph ${file}${groupLabel(main)}.`,
           includeNodeIds: new Set(main.nodeIds),
         })
       } else {
         for (const component of analysis.components) {
           jobs.push({
-            name: `${base} · 分量${component.index}${groupLabel(component)}`,
-            description: `从 ComfyUI 图工作流 ${file} 提取第 ${component.index} 个分量（${component.size} 节点）${groupLabel(component)}。`,
+            name: `${base} · Component ${component.index}${groupLabel(component)}`,
+            description: `Extracted component ${component.index} (${component.size} nodes) from the ComfyUI graph ${file}${groupLabel(component)}.`,
             includeNodeIds: new Set(component.nodeIds),
           })
         }
@@ -326,14 +326,14 @@ export async function apply(ctx: Context, entryConfig: Partial<Record<keyof Conf
       const warnings: string[] = []
       for (const job of jobs) {
         const converted = convertGraphToApi(graph, objectInfo, { includeNodeIds: job.includeNodeIds })
-        if (!converted.ok) return { ok: false, error: `${job.name}：${converted.error}` }
-        for (const warning of converted.warnings) warnings.push(`${job.name}：${warning}`)
+        if (!converted.ok) return { ok: false, error: `${job.name}: ${converted.error}` }
+        for (const warning of converted.warnings) warnings.push(`${job.name}: ${warning}`)
         const hasOutput = Object.values(converted.workflow).some((node) => {
           const def = objectInfo[node.class_type] as { output_node?: boolean } | undefined
           return def?.output_node === true
         })
         if (!hasOutput) {
-          warnings.push(`${job.name}：分量没有任何输出节点（ComfyUI 无法排队），已跳过`)
+          warnings.push(`${job.name}: skipped because the component has no output nodes.`)
           continue
         }
         const parameters = analyzeWorkflowParameters(converted.workflow, objectInfo)
@@ -349,7 +349,7 @@ export async function apply(ctx: Context, entryConfig: Partial<Record<keyof Conf
         saved.push(result.workflow)
       }
       if (saved.length === 0) {
-        return { ok: false, error: '没有可提取的分量：所有分量都无输出节点或被跳过' }
+        return { ok: false, error: 'No components were extracted. All components lack output nodes or were skipped.' }
       }
       return { ok: true, saved, analysis, warnings }
     },

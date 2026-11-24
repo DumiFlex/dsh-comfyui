@@ -78,7 +78,7 @@ function nodeInGroup(node: GraphNodeLike, group: GraphGroupLike): boolean {
  */
 export function analyzeGraph(graph: unknown): GraphAnalysis | { ok: false; error: string } {
   if (!isObject(graph) || !Array.isArray(graph.nodes) || !Array.isArray(graph.links)) {
-    return { ok: false, error: '无法解析图文件（缺少 nodes/links）' }
+    return { ok: false, error: 'Invalid graph: missing nodes or links' }
   }
   const nodes = graph.nodes as GraphNodeLike[]
   // Virtual nodes (Set/Get wireless links, rgthree mode relays) are rewired
@@ -153,7 +153,7 @@ export function analyzeGraph(graph: unknown): GraphAnalysis | { ok: false; error
     const members = memberIds.map((id) => activeById.get(id)!)
     const groupTitles = groups
       .filter((group) => members.some((member) => nodeInGroup(member, group)))
-      .map((group) => group.title ?? '(未命名组)')
+      .map((group) => group.title ?? '(Untitled group)')
     const nodeTypes = [...new Set(members.map((member) => member.type).filter((type) => type !== ''))]
     components.push({ index: components.length + 1, nodeIds: memberIds, size: memberIds.length, groups: groupTitles, nodeTypes })
   }

@@ -633,13 +633,16 @@ globalThis.fetch = realFetch
     id: 'wf-test',
     name: 'Compat T2I',
     description: '',
+    tags: ['文生图'],
     workflow: {
-      3: { class_type: 'KSampler', inputs: { seed: 1, steps: 8 } },
+      3: { class_type: 'KSampler', inputs: { seed: 1, steps: 8, positive: ['6', 0], negative: ['7', 0] } },
       6: { class_type: 'CLIPTextEncode', inputs: { text: 'a default cat', clip: ['4', 1] } },
+      7: { class_type: 'CLIPTextEncode', inputs: { text: 'blurry' } },
       9: { class_type: 'SaveImage', inputs: { images: ['8', 0], filename_prefix: 'ComfyUI' } },
     },
     parameters: [
       { id: 'p1', name: 'prompt', label: '提示词', type: 'string', nodeId: '6', inputKey: 'text', default: 'a default cat' },
+      { id: 'p3', name: 'prompt_2', label: '提示词', type: 'string', nodeId: '7', inputKey: 'text', default: 'blurry' },
       { id: 'p2', name: 'seed', label: '种子', type: 'number', nodeId: '3', inputKey: 'seed', default: 1 },
     ],
   }]))
@@ -658,9 +661,9 @@ globalThis.fetch = realFetch
     const listing = render(await tool.execute({ action: 'list' }, direct))
     check(
       'workflow list: says unpassed parameters use defaults; the prompt is marked to fill (its default hidden), seed keeps its default',
-      listing.includes('未传的参数使用默认值') &&
-        listing.includes('  prompt(提示词) — 按用户需求填写，未明确时据需求自行发挥') && !listing.includes('a default cat') &&
-        listing.includes('  seed(种子，默认 1)'),
+      listing.includes('omitted values use their defaults') && listing.includes('Tags: Text to image') &&
+        listing.includes("  prompt(Prompt) — Compose from the user's request.") && !listing.includes('a default cat') &&
+        listing.includes('  seed(Seed, default 1)') && listing.includes('prompt_2(Negative prompt, default "blurry")'),
       listing,
     )
 
@@ -672,7 +675,7 @@ globalThis.fetch = realFetch
     }
     check(
       'workflow run: a misspelt parameter name is refused and nothing is queued',
-      refused.includes('no parameter "promt"') && refused.includes('Valid parameter names: prompt, seed') && submitted.length === 0,
+      refused.includes('no parameter "promt"') && refused.includes('Valid parameter names: prompt, prompt_2, seed') && submitted.length === 0,
       `error=${JSON.stringify(refused)} submitted=${submitted.length}`,
     )
 
@@ -681,6 +684,7 @@ globalThis.fetch = realFetch
     check(
       'workflow run: the passed prompt is submitted and reported, with the subject-report instruction',
       submitted.at(-1)?.['6']?.inputs?.text === 'a red fox in snow' &&
+        submitted.at(-1)?.['7']?.inputs?.text === 'blurry' &&
         passedText.includes('Prompt used (prompt): "a red fox in snow"') && passedText.includes('state in one sentence what was generated') &&
         /^!\[image 1\]\(/m.test(passedText),
       passedText,

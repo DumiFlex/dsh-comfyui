@@ -160,7 +160,7 @@ check('foreign format refused', wrongFormat.ok === false, JSON.stringify(wrongFo
 const future = analyzeImportPackage(Buffer.from(zipSync({
   'preset.json': strToU8(JSON.stringify({ format: PRESET_FORMAT, version: 99, workflows: [] })),
 })))
-check('newer version refused with a hint', future.ok === false && (future.error ?? '').includes('升级'), JSON.stringify(future))
+check('newer version refused with a hint', future.ok === false && (future.error ?? '').includes('requires a newer plugin'), JSON.stringify(future))
 const analysis = analyzeImportPackage(zipBytes)
 check('analyze succeeds', analysis.ok === true, analysis.ok ? '' : analysis.error)
 check('three candidates', analysis.ok && analysis.analysis.workflows.length === 3)

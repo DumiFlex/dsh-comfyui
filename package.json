@@ -33,6 +33,7 @@
     "build:host": "tsc -p tsconfig.json",
     "build:client": "tsdown -c tsdown.config.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
+    "test:localization": "npm run build:host && node scripts/test-localization.mjs",
     "test:host-compat": "npm run build:host && node scripts/test-host-compat.mjs",
     "prepare": "npm run build",
     "prepack": "npm run build"

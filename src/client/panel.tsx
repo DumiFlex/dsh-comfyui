@@ -9,6 +9,8 @@ import { Component, createElement as h, useCallback, useEffect, useRef, useState
 import { getJson, getList, postJson, postRaw } from './api.ts'
 import { panelStore, usePanelOpen, usePanelTab } from './panel-store.ts'
 import { ComfyUIIcon } from './trigger.tsx'
+import { getLang } from './i18n.ts'
+import { extractedWorkflowText, hasWorkflowTag, parameterLabel, PRESET_TAGS, tagLabel, workflowDisplayName } from '../workflow-localization.js'
 import { Lightbox } from './lightbox.js'
 
 /** Panel geometry: pixel position/size once the user dragged or resized. */
@@ -103,6 +105,7 @@ interface WorkflowEntry {
   id: string
   name: string
   description: string
+  source?: 'user' | 'comfyui'
   workflow: Record<string, unknown>
   parameters?: WorkflowParameter[]
   tags?: string[]
@@ -159,7 +162,6 @@ function isSkillImage(path: string): boolean {
 
 /** Preset workflow classification tags (users can add custom ones). Stored as
  * plain text, so the tag identity is the label itself. */
-const PRESET_TAGS = ['图生图', '文生图', '文生视频', '图生视频', '参考生视频', '文生音频', '参考生音频']
 
 /** A workflow saved on the ComfyUI server (userdata/workflows). */
 interface ComfyUIWorkflowEntry {
@@ -860,7 +862,7 @@ function ParameterEditor(props: {
         h('div', { className: 'dsc-param-fields' },
           h('input', {
             className: 'dsc-input dsc-input--sm',
-            value: param.label,
+            value: parameterLabel(param.label, getLang()),
             placeholder: t('wfParamLabel'),
             onChange: (event: { target: { value: string } }) => update(index, { label: event.target.value }),
           }),
@@ -1674,7 +1676,7 @@ function TagEditor(props: {
         key: tag,
         className: `dsc-tag-chip${props.tags.includes(tag) ? ' dsc-tag-chip--active' : ''}`,
         onClick: () => toggle(tag),
-      }, tag)),
+      }, tagLabel(tag, getLang()))),
     ),
     customTags.length > 0
       ? h('div', { className: 'dsc-tag-row' },
@@ -1939,7 +1941,7 @@ function SkillPackEditor(props: {
 
   const head = h('div', { className: 'dsc-view-head' },
     h('button', { className: 'dsc-btn', onClick: props.onBack }, t('wfViewBack')),
-    h('div', { className: 'dsc-wf-name', title: props.workflow.name }, `${t('skillTitle')} · ${props.workflow.name}`),
+    h('div', { className: 'dsc-wf-name', title: extractedWorkflowText(props.workflow, getLang()).name }, `${t('skillTitle')} · ${extractedWorkflowText(props.workflow, getLang()).name}`),
   )
 
   if (!enabled) {
@@ -2477,11 +2479,11 @@ function WorkflowsTab({ t }: ComfyUIPanelProps): ReturnType<typeof h> {
     return h('div', { className: 'dsc-form' },
       h('div', { className: 'dsc-field' },
         h('label', null, t('wfName')),
-        h('input', { className: 'dsc-input', value: editing.name ?? '', onChange: (event: { target: { value: string } }) => setEditing({ ...editing, name: event.target.value }) }),
+        h('input', { className: 'dsc-input', value: extractedWorkflowText({ ...editing, name: editing.name ?? '' }, getLang()).name, onChange: (event: { target: { value: string } }) => setEditing({ ...editing, name: event.target.value }) }),
       ),
       h('div', { className: 'dsc-field' },
         h('label', null, t('wfDesc')),
-        h('textarea', { className: 'dsc-textarea', placeholder: t('wfDescPlaceholder'), value: editing.description ?? '', onChange: (event: { target: { value: string } }) => setEditing({ ...editing, description: event.target.value }) }),
+        h('textarea', { className: 'dsc-textarea', placeholder: t('wfDescPlaceholder'), value: extractedWorkflowText({ ...editing, name: editing.name ?? '' }, getLang()).description, onChange: (event: { target: { value: string } }) => setEditing({ ...editing, description: event.target.value }) }),
       ),
       h('div', { className: 'dsc-field' },
         h('label', null, t('wfTags')),
@@ -2551,7 +2553,7 @@ function WorkflowsTab({ t }: ComfyUIPanelProps): ReturnType<typeof h> {
     if (pb !== -1) return 1
     return b[1] - a[1]
   }).map(([tag]) => tag)
-  const visibleList = tagFilter === null ? list : list.filter((workflow) => (workflow.tags ?? []).includes(tagFilter))
+  const visibleList = tagFilter === null ? list : list.filter((workflow) => hasWorkflowTag(workflow, tagFilter))
 
   const apiFold = h('details', { className: 'dsc-fold', open: true },
     h('summary', null, `${t('wfLibrarySection')} (${visibleList.length})`),
@@ -2569,41 +2571,44 @@ function WorkflowsTab({ t }: ComfyUIPanelProps): ReturnType<typeof h> {
               onChange: (event: { target: { value: string } }) => setTagFilter(event.target.value === '' ? null : event.target.value),
             },
               h('option', { value: '' }, `${t('wfTagAll')} (${list.length})`),
-              visibleTags.map((tag) => h('option', { key: tag, value: tag }, `${tag} (${tagCounts.get(tag) ?? 0})`)),
+              visibleTags.map((tag) => h('option', { key: tag, value: tag }, `${tagLabel(tag, getLang())} (${tagCounts.get(tag) ?? 0})`)),
             ),
           )
         : null,
       visibleList.length === 0
         ? h('div', { className: 'dsc-meta' }, t('wfEmpty'))
-        : h('div', { className: 'dsc-list' }, visibleList.map((workflow) => h('div', { key: workflow.id, className: 'dsc-wf', title: t('wfNameCopyHint'), onClick: () => { void copyText(workflow.name).then((ok) => { if (ok) setNotice(`${t('wfNameCopied')}：${workflow.name}`) }) } },
-          h('div', { className: 'dsc-wf-top' },
-            h('div', { className: 'dsc-wf-name', title: workflow.name }, workflow.name),
-            (workflow.tags ?? []).length > 0
-              ? h('div', { className: 'dsc-wf-tags' }, (workflow.tags ?? []).map((tag) => h('span', { key: tag, className: 'dsc-tag-chip dsc-tag-chip--mini' }, tag)))
+        : h('div', { className: 'dsc-list' }, visibleList.map((workflow) => {
+          const display = extractedWorkflowText(workflow, getLang())
+          return h('div', { key: workflow.id, className: 'dsc-wf', title: t('wfNameCopyHint'), onClick: () => { void copyText(display.name).then((ok) => { if (ok) setNotice(`${t('wfNameCopied')}：${display.name}`) }) } },
+            h('div', { className: 'dsc-wf-top' },
+              h('div', { className: 'dsc-wf-name', title: display.name }, display.name),
+              (workflow.tags ?? []).length > 0
+                ? h('div', { className: 'dsc-wf-tags' }, (workflow.tags ?? []).map((tag) => h('span', { key: tag, className: 'dsc-tag-chip dsc-tag-chip--mini' }, tagLabel(tag, getLang()))))
+                : null,
+              workflow.skillDir !== undefined
+                ? h('span', { className: 'dsc-badge dsc-badge--ok', title: t('skillBadgeHint') }, workflow.requireSkill === true ? t('skillBadgeRequired') : t('skillBadge'))
+                : null,
+            ),
+            display.description !== '' ? h('div', { className: 'dsc-wf-desc' }, display.description) : null,
+            h('div', { className: 'dsc-wf-updated' }, `${t('wfUpdated')} ${formatTs(workflow.updatedAt)}`),
+            h('div', { className: 'dsc-wf-actions' },
+              h('button', { className: 'dsc-btn', disabled: busy, onClick: (event: { stopPropagation: () => void }) => { event.stopPropagation(); void run(workflow.id) } }, t('wfRun')),
+              h('button', { className: 'dsc-btn', disabled: busy, onClick: (event: { stopPropagation: () => void }) => { event.stopPropagation(); setEditing({ ...workflow, workflow: JSON.stringify(workflow.workflow, null, 2), parameters: workflow.parameters ?? [], tags: workflow.tags ?? [] }); setError(null) } }, t('wfEdit')),
+              h('button', { className: 'dsc-btn', disabled: busy, onClick: (event: { stopPropagation: () => void }) => { event.stopPropagation(); setSkillFor(workflow); setError(null) } }, t('skillButton')),
+              h('button', { className: 'dsc-btn', disabled: busy, onClick: (event: { stopPropagation: () => void }) => { event.stopPropagation(); requestRemove(workflow) } }, t('wfDelete')),
+            ),
+            deleting?.id === workflow.id
+              ? h('div', { className: 'dsc-dialog dsc-dialog--danger', onClick: (event: { stopPropagation: () => void }) => event.stopPropagation() },
+                h('div', { className: 'dsc-dialog-head dsc-danger-text' }, t('skillDeleteWithWorkflow')),
+                h('div', { className: 'dsc-row' },
+                  h('button', { className: 'dsc-btn dsc-btn--danger', disabled: busy, onClick: () => { setDeleting(null); void remove(workflow.id, true) } }, t('skillDeleteBoth')),
+                  h('button', { className: 'dsc-btn', disabled: busy, onClick: () => { setDeleting(null); void remove(workflow.id, false) } }, t('skillKeepPack')),
+                  h('button', { className: 'dsc-btn', onClick: () => setDeleting(null) }, t('cancel')),
+                ),
+              )
               : null,
-            workflow.skillDir !== undefined
-              ? h('span', { className: 'dsc-badge dsc-badge--ok', title: t('skillBadgeHint') }, workflow.requireSkill === true ? t('skillBadgeRequired') : t('skillBadge'))
-              : null,
-          ),
-          workflow.description !== '' ? h('div', { className: 'dsc-wf-desc' }, workflow.description) : null,
-          h('div', { className: 'dsc-wf-updated' }, `${t('wfUpdated')} ${formatTs(workflow.updatedAt)}`),
-          h('div', { className: 'dsc-wf-actions' },
-            h('button', { className: 'dsc-btn', disabled: busy, onClick: (event: { stopPropagation: () => void }) => { event.stopPropagation(); void run(workflow.id) } }, t('wfRun')),
-            h('button', { className: 'dsc-btn', disabled: busy, onClick: (event: { stopPropagation: () => void }) => { event.stopPropagation(); setEditing({ ...workflow, workflow: JSON.stringify(workflow.workflow, null, 2), parameters: workflow.parameters ?? [], tags: workflow.tags ?? [] }); setError(null) } }, t('wfEdit')),
-            h('button', { className: 'dsc-btn', disabled: busy, onClick: (event: { stopPropagation: () => void }) => { event.stopPropagation(); setSkillFor(workflow); setError(null) } }, t('skillButton')),
-            h('button', { className: 'dsc-btn', disabled: busy, onClick: (event: { stopPropagation: () => void }) => { event.stopPropagation(); requestRemove(workflow) } }, t('wfDelete')),
-          ),
-          deleting?.id === workflow.id
-            ? h('div', { className: 'dsc-dialog dsc-dialog--danger', onClick: (event: { stopPropagation: () => void }) => event.stopPropagation() },
-              h('div', { className: 'dsc-dialog-head dsc-danger-text' }, t('skillDeleteWithWorkflow')),
-              h('div', { className: 'dsc-row' },
-                h('button', { className: 'dsc-btn dsc-btn--danger', disabled: busy, onClick: () => { setDeleting(null); void remove(workflow.id, true) } }, t('skillDeleteBoth')),
-                h('button', { className: 'dsc-btn', disabled: busy, onClick: () => { setDeleting(null); void remove(workflow.id, false) } }, t('skillKeepPack')),
-                h('button', { className: 'dsc-btn', onClick: () => setDeleting(null) }, t('cancel')),
-              ),
-            )
-            : null,
-        ))),
+          )
+        })),
     ),
   )
 
@@ -3011,7 +3016,7 @@ function ImportDialog(props: {
               },
                 h('span', { className: 'dsc-transfer-item-name', title: outcome.name },
                   outcome.ok
-                    ? t('transferImportedItem', { src: outcome.name, dst: outcome.newName ?? '' })
+                    ? t('transferImportedItem', { src: outcome.name, dst: workflowDisplayName(outcome.newName ?? '', getLang()) })
                     : t('transferImportFailedItem', { src: outcome.name, reason: outcome.error ?? '' }),
                 ),
                 outcome.warnings.length > 0

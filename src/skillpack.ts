@@ -193,25 +193,25 @@ export function skillSlug(name: string, id: string): string {
  */
 export function parseSkillPath(path: string): SkillPackResult<{ bucket: SkillBucket; file: string }> {
   const normalized = path.replace(/\\/g, '/').trim()
-  if (normalized === '') return fail('路径为空')
-  if (normalized.includes('..')) return fail('路径不合法')
+  if (normalized === '') return fail('Path is empty')
+  if (normalized.includes('..')) return fail('Invalid path')
   const parts = normalized.split('/').filter((part) => part !== '')
   if (parts.length === 1) {
     const file = parts[0]!
-    if (!FILE_NAME.test(file)) return fail(`文件名不合法：${file}`)
+    if (!FILE_NAME.test(file)) return fail(`Invalid file name: ${file}`)
     return { ok: true, value: { bucket: '', file } }
   }
-  if (parts.length !== 2) return fail('技能包只有一层子目录')
+  if (parts.length !== 2) return fail('Skill packs support one level of subdirectories')
   const bucket = parts[0]!
   const file = parts[1]!
-  if (!DIR_NAME.test(bucket)) return fail(`子目录名不合法：${bucket}`)
-  if (!FILE_NAME.test(file)) return fail(`文件名不合法：${file}`)
+  if (!DIR_NAME.test(bucket)) return fail(`Invalid subdirectory: ${bucket}`)
+  if (!FILE_NAME.test(file)) return fail(`Invalid file name: ${file}`)
   // The accepted types are the same in every directory; only the size cap
   // differs (see writeBytes), because that depends on whether the model reads
   // the file as text, not on where it sits.
   const extension = extensionOf(file)
   if (![...TEXT_EXTENSIONS, ...ASSET_EXTENSIONS].includes(extension)) {
-    return fail(`不支持的文件类型：${extension === '' ? '(无扩展名)' : extension}`)
+    return fail(`Unsupported file type: ${extension === '' ? '(no extension)' : extension}`)
   }
   return { ok: true, value: { bucket, file } }
 }
@@ -223,14 +223,14 @@ export function parseSkillPath(path: string): SkillPackResult<{ bucket: SkillBuc
  */
 export function parseSkillDir(name: string): SkillPackResult<string> {
   const clean = name.replace(/[\\/]/g, '').trim()
-  if (clean === '') return fail('目录名为空')
-  if (!DIR_NAME.test(clean)) return fail(`目录名不合法：${name}（字母/数字/汉字/下划线/连字符，最多 40 字符）`)
+  if (clean === '') return fail('Directory name is empty')
+  if (!DIR_NAME.test(clean)) return fail(`Invalid directory name: ${name}. Use up to 40 letters, digits, Han characters, underscores or hyphens.`)
   return { ok: true, value: clean }
 }
 
 /** Root-level files: SKILL.md alone. Everything else belongs in a bucket. */
 function checkRootFile(file: string): SkillPackResult<true> {
-  if (file !== SKILL_MAIN) return fail(`技能包根目录只允许 ${SKILL_MAIN}，其他文件请放进 references / scripts / assets`)
+  if (file !== SKILL_MAIN) return fail(`Only ${SKILL_MAIN} is allowed at the root. Put other files in references, scripts or assets.`)
   return { ok: true, value: true }
 }
 
@@ -299,11 +299,11 @@ export class SkillPackStore {
 
   /** Absolute path of one pack, after re-validating the slug from workflows.json. */
   private dirOf(slug: string): SkillPackResult<string> {
-    if (!SLUG.test(slug)) return fail(`技能包目录名不合法：${slug}`)
+    if (!SLUG.test(slug)) return fail(`Invalid skill pack directory: ${slug}`)
     const root = this.root
     const dir = resolve(join(root, slug))
     const rel = relative(resolve(root), dir)
-    if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return fail('技能包路径越界')
+    if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return fail('Path is outside the skill pack')
     return { ok: true, value: dir }
   }
 
@@ -319,7 +319,7 @@ export class SkillPackStore {
     }
     const target = resolve(join(dir.value, parsed.value.bucket, parsed.value.file))
     const rel = relative(dir.value, target)
-    if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return fail('技能包路径越界')
+    if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return fail('Path is outside the skill pack')
     return { ok: true, value: target }
   }
 
@@ -447,7 +447,7 @@ export class SkillPackStore {
     if (!parsed.ok) return parsed
     const target = resolve(join(dir.value, parsed.value))
     const rel = relative(dir.value, target)
-    if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return fail('技能包路径越界')
+    if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return fail('Path is outside the skill pack')
     await mkdir(target, { recursive: true })
     return this.info(slug)
   }
@@ -459,7 +459,7 @@ export class SkillPackStore {
     try {
       return { ok: true, value: await readFile(target.value, 'utf8') }
     } catch {
-      return fail(`文件不存在：${path}`)
+      return fail(`File not found: ${path}`)
     }
   }
 
@@ -501,17 +501,17 @@ export class SkillPackStore {
       ? MAX_ASSET_BYTES
       : MAX_FILE_BYTES
     if (bytes.length > limit) {
-      return fail(`单个文件不能超过 ${Math.floor(limit / 1024)} KB（当前 ${Math.ceil(bytes.length / 1024)} KB）`)
+      return fail(`File size limit: ${Math.floor(limit / 1024)} KB (actual: ${Math.ceil(bytes.length / 1024)} KB)`)
     }
     const before = await this.info(slug)
     if (!before.ok) return before
     const existing = before.value.files.find((file) => file.path === path)
     if (existing === undefined && before.value.files.length >= MAX_PACK_FILES) {
-      return fail(`一个技能包最多 ${MAX_PACK_FILES} 个文件`)
+      return fail(`Skill packs support up to ${MAX_PACK_FILES} files`)
     }
     const projected = before.value.totalBytes - (existing?.size ?? 0) + bytes.length
     if (projected > MAX_PACK_BYTES) {
-      return fail(`一个技能包最多 ${Math.floor(MAX_PACK_BYTES / 1024 / 1024)} MB`)
+      return fail(`Skill pack size limit: ${Math.floor(MAX_PACK_BYTES / 1024 / 1024)} MB`)
     }
     if (parsed.value.bucket !== '') await mkdir(join(before.value.dir, parsed.value.bucket), { recursive: true })
     await writeFile(target.value, bytes)
@@ -540,7 +540,7 @@ export class SkillPackStore {
       if (!parsed.ok) return parsed
       const limit = ASSET_EXTENSIONS.includes(extensionOf(parsed.value.file)) ? MAX_ASSET_BYTES : MAX_FILE_BYTES
       if (entry.bytes.length > limit) {
-        return fail(`单个文件不能超过 ${Math.floor(limit / 1024)} KB（${entry.path} 当前 ${Math.ceil(entry.bytes.length / 1024)} KB）`)
+        return fail(`File size limit: ${Math.floor(limit / 1024)} KB (${entry.path} actual size: ${Math.ceil(entry.bytes.length / 1024)} KB)`)
       }
       const existingSize = existingByPath.get(entry.path)
       if (existingSize === undefined) newCount += 1
@@ -549,10 +549,10 @@ export class SkillPackStore {
       plan.push({ target: target.value, bytes: entry.bytes })
     }
     if (before.value.files.length + newCount > MAX_PACK_FILES) {
-      return fail(`一个技能包最多 ${MAX_PACK_FILES} 个文件`)
+      return fail(`Skill packs support up to ${MAX_PACK_FILES} files`)
     }
     if (before.value.totalBytes - existingReplacedBytes + incomingBytes > MAX_PACK_BYTES) {
-      return fail(`一个技能包最多 ${Math.floor(MAX_PACK_BYTES / 1024 / 1024)} MB`)
+      return fail(`Skill pack size limit: ${Math.floor(MAX_PACK_BYTES / 1024 / 1024)} MB`)
     }
     for (const item of plan) {
       await mkdir(dirname(item.target), { recursive: true })
@@ -568,21 +568,21 @@ export class SkillPackStore {
     try {
       return { ok: true, value: await readFile(target.value) }
     } catch {
-      return fail(`文件不存在：${path}`)
+      return fail(`File not found: ${path}`)
     }
   }
 
   /** Rename one file; SKILL.md is fixed and both sides are validated. */
   async rename(slug: string, from: string, to: string): Promise<SkillPackResult<SkillPackInfo>> {
-    if (from === SKILL_MAIN) return fail(`${SKILL_MAIN} 不能重命名`)
+    if (from === SKILL_MAIN) return fail(`${SKILL_MAIN}  cannot be renamed`)
     const source = this.fileOf(slug, from)
     if (!source.ok) return source
     const target = this.fileOf(slug, to)
     if (!target.ok) return target
-    if (to === SKILL_MAIN) return fail(`${SKILL_MAIN} 已存在，请换一个名字`)
+    if (to === SKILL_MAIN) return fail(`${SKILL_MAIN} already exists. Choose a different name.`)
     try {
       await stat(target.value)
-      return fail(`目标已存在：${to}`)
+      return fail(`Destination already exists: ${to}`)
     } catch {
       // Absent target is the expected case.
     }
@@ -594,20 +594,20 @@ export class SkillPackStore {
     try {
       await rename(source.value, target.value)
     } catch {
-      return fail(`重命名失败：${from}`)
+      return fail(`Could not rename: ${from}`)
     }
     return this.info(slug)
   }
 
   /** Delete one file; SKILL.md is fixed. */
   async remove(slug: string, path: string): Promise<SkillPackResult<SkillPackInfo>> {
-    if (path === SKILL_MAIN) return fail(`${SKILL_MAIN} 不能删除，如需移除整个技能包请用"销毁技能包"`)
+    if (path === SKILL_MAIN) return fail(`${SKILL_MAIN} cannot be deleted on its own. Use the panel to delete the entire skill pack.`)
     const target = this.fileOf(slug, path)
     if (!target.ok) return target
     try {
       await unlink(target.value)
     } catch {
-      return fail(`文件不存在：${path}`)
+      return fail(`File not found: ${path}`)
     }
     return this.info(slug)
   }
@@ -633,26 +633,26 @@ export class SkillPackStore {
  */
 export function seedSkillDocument(workflowName: string, parameters: string[]): string {
   const paramLines = parameters.length > 0
-    ? parameters.map((name) => `- \`${name}\`：`).join('\n')
-    : '- （运行 action: list 可看到完整参数清单）'
-  return joinFrontmatter(`${workflowName} 的使用说明`, [
+    ? parameters.map((name) => `- \`${name}\`:`).join('\n')
+    : '- Use action: list to see the full parameter list.'
+  return joinFrontmatter(`Instructions for ${workflowName}`, [
     `# ${workflowName}`,
     '',
-    '## 什么时候用这个工作流',
+    '## When to use this workflow',
     '',
-    '（写清适用场景，Agent 靠它决定选不选这个工作流）',
+    'Describe when the agent should choose this workflow.',
     '',
-    '## 关键参数',
+    '## Key parameters',
     '',
     paramLines,
     '',
-    '## 注意事项',
+    '## Troubleshooting',
     '',
-    '（容易翻车的环节写在这里）',
+    'Record known failure modes here.',
     '',
-    '## 参考文档',
+    '## References',
     '',
-    '（把成体系的内容拆进 references/，在这里列出来，Agent 需要时才会去读）',
+    'Link to files under references/ for the agent to read as needed.',
     '',
   ].join('\n'))
 }
@@ -744,7 +744,7 @@ export function createWorkflowSkillPacks(host: SkillPackHost): WorkflowSkillPack
     const workflow = await host.getWorkflow(id)
     if (workflow === undefined) return fail(`workflow "${id}" not found`)
     const slug = workflow.skillDir
-    if (slug === undefined || slug === '') return fail(`工作流 "${workflow.name}" 没有技能包`)
+    if (slug === undefined || slug === '') return fail(`Workflow "${workflow.name}" has no skill pack`)
     return { ok: true, value: { workflow, slug } }
   }
 
@@ -851,7 +851,7 @@ export function createWorkflowSkillPacks(host: SkillPackHost): WorkflowSkillPack
       if (!resolved.ok) return resolved
       const base = file.replace(/^.*[\\/]/, '').trim()
       const target = bucket !== undefined && bucket !== '' ? bucket : defaultBucketFor(base)
-      if (target === undefined) return fail(`不支持导入这种文件类型：${base}`)
+      if (target === undefined) return fail(`Cannot import this file type: ${base}`)
       const path = `${target}/${base}`
       const written = await packs.writeBytes(resolved.value.slug, path, bytes)
       if (!written.ok) return written

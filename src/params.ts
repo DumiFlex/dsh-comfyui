@@ -137,7 +137,7 @@ export function uploadKindOf(
 function displayName(workflow: Workflow, nodeId: string, inputKey: string): string {
   const node = workflow[nodeId]
   if (node === undefined) return inputKey
-  if (TEXT_CLASSES.has(node.class_type)) return inputKey === 'value' ? '文本' : '提示词'
+  if (TEXT_CLASSES.has(node.class_type)) return inputKey === 'value' ? 'Text' : 'Prompt'
   return `${node.class_type} · ${inputKey}`
 }
 
@@ -341,9 +341,12 @@ export function analyzeWorkflowParameters(workflow: Workflow, objectInfo?: Recor
   // (outputs consumed by nothing) are dead inputs and skipped by prompt
   // detection, so a stray text box that nothing connects to is not exposed.
   const consumed = new Set<string>()
+  const negative = new Set<string>()
   for (const node of Object.values(workflow)) {
-    for (const raw of Object.values(node.inputs ?? {})) {
-      if (Array.isArray(raw) && typeof raw[0] === 'string') consumed.add(raw[0])
+    for (const [key, raw] of Object.entries(node.inputs ?? {})) {
+      if (!Array.isArray(raw) || typeof raw[0] !== 'string') continue
+      consumed.add(raw[0])
+      if (key === 'negative' || key === 'negative_prompt') negative.add(raw[0])
     }
   }
 
@@ -422,21 +425,21 @@ export function analyzeWorkflowParameters(workflow: Workflow, objectInfo?: Recor
     for (const [key, raw] of Object.entries(inputs)) {
       if (!isPrimitive(raw)) continue // links are [nodeId, index] arrays
       if (TEXT_CLASSES.has(classType) && TEXT_KEYS.has(key)) {
-        if (consumed.has(id) && take('prompt', 2)) add({ name: 'prompt', label: displayName(workflow, id, key), type: 'string', nodeId: id, inputKey: key, value: raw, classType })
+        if (consumed.has(id) && take('prompt', 2)) add({ name: 'prompt', label: negative.has(id) ? 'Negative prompt' : displayName(workflow, id, key), type: 'string', nodeId: id, inputKey: key, value: raw, classType })
         continue
       }
       if (classType === 'EmptyLatentImage' && (key === 'width' || key === 'height') && typeof raw === 'number') {
         if (sizeNode !== undefined && sizeNode !== id) continue
         sizeNode = id
-        add({ name: key, label: key === 'width' ? '宽度' : '高度', type: 'number', nodeId: id, inputKey: key, value: raw, classType })
+        add({ name: key, label: key === 'width' ? 'Width' : 'Height', type: 'number', nodeId: id, inputKey: key, value: raw, classType })
         continue
       }
       if (classType === 'KSampler' && key === 'steps' && typeof raw === 'number') {
-        if (take('steps', 1)) add({ name: 'steps', label: '采样步数', type: 'number', nodeId: id, inputKey: key, value: raw, classType })
+        if (take('steps', 1)) add({ name: 'steps', label: 'Sampling steps', type: 'number', nodeId: id, inputKey: key, value: raw, classType })
         continue
       }
       if (classType === 'KSampler' && key === 'seed' && typeof raw === 'number') {
-        if (take('seed', 1)) add({ name: 'seed', label: '随机种子', type: 'number', nodeId: id, inputKey: key, value: raw, random: true, classType })
+        if (take('seed', 1)) add({ name: 'seed', label: 'Random seed', type: 'number', nodeId: id, inputKey: key, value: raw, random: true, classType })
         continue
       }
       // Key-name heuristics for custom node classes (MiniMax etc.): prompt
@@ -444,16 +447,16 @@ export function analyzeWorkflowParameters(workflow: Workflow, objectInfo?: Recor
       if (typeof raw === 'string') {
         const uploadKind = uploadKindOf(objectInfo, classType, key)
         if (uploadKind !== undefined && /^(image|video|audio|file|audio_file|video_file|path|sound)$/i.test(key)) {
-          const label = uploadKind === 'video' ? '视频' : uploadKind === 'audio' ? '音频' : '图片'
+          const label = uploadKind === 'video' ? 'Video' : uploadKind === 'audio' ? 'Audio' : 'Image'
           add({ name: key, label, type: 'string', nodeId: id, inputKey: key, value: raw, classType, upload: uploadKind })
           continue
         }
         if (key === 'prompt' || key === 'text' || key === 'value') {
-          if (consumed.has(id) && take('prompt', 2)) add({ name: 'prompt', label: displayName(workflow, id, key), type: 'string', nodeId: id, inputKey: key, value: raw, classType })
+          if (consumed.has(id) && take('prompt', 2)) add({ name: 'prompt', label: negative.has(id) ? 'Negative prompt' : displayName(workflow, id, key), type: 'string', nodeId: id, inputKey: key, value: raw, classType })
           continue
         }
         if (key === 'aspect_ratio') {
-          if (take('aspect_ratio', 1)) add({ name: 'aspect_ratio', label: '宽高比', type: 'string', nodeId: id, inputKey: key, value: raw, classType })
+          if (take('aspect_ratio', 1)) add({ name: 'aspect_ratio', label: 'Aspect ratio', type: 'string', nodeId: id, inputKey: key, value: raw, classType })
           continue
         }
         // DynamicCombo child (e.g. "aspect_ratio.size"): size presets of the
@@ -462,27 +465,27 @@ export function analyzeWorkflowParameters(workflow: Workflow, objectInfo?: Recor
           const parentKey = key.slice(0, -'.size'.length)
           const parentValue = inputs[parentKey] as string
           const sizeOptions = comboChildOptions(objectInfo, classType, parentKey, parentValue)
-          if (take('size', 1)) add({ name: 'size', label: '尺寸', type: 'string', nodeId: id, inputKey: key, value: raw, classType, options: sizeOptions })
+          if (take('size', 1)) add({ name: 'size', label: 'Size', type: 'string', nodeId: id, inputKey: key, value: raw, classType, options: sizeOptions })
           continue
         }
       }
       if (typeof raw === 'number') {
         if (key === 'steps') {
-          if (take('steps', 1)) add({ name: 'steps', label: '采样步数', type: 'number', nodeId: id, inputKey: key, value: raw, classType })
+          if (take('steps', 1)) add({ name: 'steps', label: 'Sampling steps', type: 'number', nodeId: id, inputKey: key, value: raw, classType })
           continue
         }
         if (/seed/i.test(key)) {
-          if (take('seed', 1)) add({ name: 'seed', label: '随机种子', type: 'number', nodeId: id, inputKey: key, value: raw, random: true, classType })
+          if (take('seed', 1)) add({ name: 'seed', label: 'Random seed', type: 'number', nodeId: id, inputKey: key, value: raw, random: true, classType })
           continue
         }
         if (key === 'width' || key === 'height') {
           if (sizeNode !== undefined && sizeNode !== id) continue
           sizeNode = id
-          add({ name: key, label: key === 'width' ? '宽度' : '高度', type: 'number', nodeId: id, inputKey: key, value: raw, classType })
+          add({ name: key, label: key === 'width' ? 'Width' : 'Height', type: 'number', nodeId: id, inputKey: key, value: raw, classType })
           continue
         }
         if (key === 'duration' || key === 'length' || key === 'frames') {
-          if (take('duration', 1)) add({ name: 'duration', label: '时长', type: 'number', nodeId: id, inputKey: key, value: raw, classType })
+          if (take('duration', 1)) add({ name: 'duration', label: 'Duration', type: 'number', nodeId: id, inputKey: key, value: raw, classType })
         }
       }
     }

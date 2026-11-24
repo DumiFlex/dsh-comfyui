@@ -15,6 +15,7 @@ import type { GraphAnalysis } from './analyze.js'
 import type { RunProgress } from './progress.js'
 import type { QueuedRun } from './queue.js'
 import { refreshParameterMetadata, type Workflow, type WorkflowParameter } from './params.js'
+import { extractedWorkflowText, parameterLabel, tagLabel } from './workflow-localization.js'
 import type { HostHint } from './host-hint.js'
 import { SKILL_MAIN, joinFrontmatter, type WorkflowSkillPacks } from './skillpack.js'
 
@@ -104,7 +105,7 @@ export interface ComfyUIRuntime {
   getComfyWorkflow(file: string): Promise<unknown>
   /** Analyze one ComfyUI-side graph: connected components, groups, dangling nodes. */
   analyzeComfyWorkflow(file: string): Promise<GraphAnalysis | { ok: false; error: string }>
-  /** Extract runnable API workflows from a ComfyUI-side graph (整体/按分量/主流程). */
+  /** Extract runnable API workflows from a ComfyUI-side graph (all components together, individual components, or the main flow). */
   extractComfyWorkflow(input: {
     file: string
     mode: 'all' | 'split' | 'main'
@@ -407,10 +408,15 @@ function mediaMarkdown(item: RunMediaItem, n: number): string {
  * auto-detected `prompt`, `prompt_2`, … (label 提示词) or any string parameter
  * whose name or label says prompt.
  */
-function promptRole(param: { name: string; label?: string; type?: string; upload?: string }): 'write' | 'negative' | undefined {
+function promptRole(param: { name: string; label?: string; type?: string; upload?: string; nodeId?: string; role?: 'write' | 'negative' }, workflow?: Workflow): 'write' | 'negative' | undefined {
   if (param.type !== 'string' || param.upload !== undefined) return undefined
   const label = param.label ?? ''
-  if (!/prompt/i.test(param.name) && !/提示/.test(label)) return undefined
+  if (param.role !== undefined) return param.role
+  if (!/prompt|提示/i.test(`${param.name} ${label}`)) return undefined
+  if (param.nodeId !== undefined && workflow !== undefined && Object.values(workflow).some((node) => {
+    const input = node?.inputs?.negative ?? node?.inputs?.negative_prompt
+    return Array.isArray(input) && input[0] === param.nodeId
+  })) return 'negative'
   return /negative|neg_|负面|反向/i.test(`${param.name} ${label}`) ? 'negative' : 'write'
 }
 
@@ -690,9 +696,9 @@ function workflowDefinition(runtime: ComfyUIRuntime, ctx: Context): ToolDefiniti
   return {
     name: 'comfyui_workflow',
     description: [
-      'The way to generate images, video or audio with ComfyUI: list the saved workflows (set up for this server), pick the one that fits, run it. Lists and runs workflows from the plugin workflow library (运行主题: API-format workflows extracted from a graph or pasted directly).',
+      'The way to generate images, video or audio with ComfyUI: list the saved workflows (set up for this server), pick the one that fits, run it. Lists and runs workflows from the plugin workflow library (API-format workflows extracted from a graph or pasted directly).',
       '`action: list` returns every runnable workflow with its id, name, description (what the workflow does), and input notes.',
-      'It also lists workflows the user saved on the ComfyUI server (衍生主题: UI graph format canvases). A graph may hold SEVERAL independent flows; each is extracted into its own runnable workflow in the panel (整体/按分量/主流程). A graph with no extracted workflow yet cannot run — tell the user to open the ComfyUI panel and 提取 it first.',
+      'It also lists workflows the user saved on the ComfyUI server (UI graph format canvases). A graph may hold SEVERAL independent flows; each is extracted into its own runnable workflow in the panel (all components together, individual components, or the main flow). A graph with no extracted workflow yet cannot run — tell the user to open the ComfyUI panel and extract it first.',
       '`action: run` runs one saved workflow by id — pass only the id plus parameter overrides keyed by the exact names from list (unknown names are rejected; parameters not passed use their defaults). Fill prompt parameters from what the user asked for, improvising from the request when unspecified. Call it directly, not from run_code, so the user sees the result card. The plugin submits the saved workflow JSON itself (never copy the JSON into your reply). It waits for media by default; add `mode: "async"` to run in the background — then end your turn instead of waiting; a completion notice brings you back, and job_output returns the media as ready-to-paste Markdown. Results are final and carry the media URLs — never re-check status or look addresses up; paste the Markdown lines the result gives into your reply to show the media.',
       '`action: get` returns one saved workflow\'s complete API-format JSON by id for inspection/diagnostics only — it consumes many tokens and is not the run path.',
       '`action: refresh` re-derives one saved workflow\'s parameter snapshot (options / numberKind / min/max/step) from the current node definitions and saves it back. Run it after the TTS-Audio-Suite voice library or node definitions changed: saved workflows snapshot their parameter options at save time, so a freshly added voice is not accepted by `action: run` until the snapshot catches up. It force-rescans the TTS voice library first, then updates only the fields derived from object_info — the parameter set (including user-added advanced parameters) is preserved. Returns `changed` with the parameter names that actually changed.',
@@ -706,7 +712,7 @@ function workflowDefinition(runtime: ComfyUIRuntime, ctx: Context): ToolDefiniti
         timeout_ms: { type: 'number', minimum: 5_000, maximum: 3_600_000, description: 'Generation wait budget in ms (default 900000 = 15 min). Video needs minutes; raise this for long videos.' },
         parameters: {
           type: 'object',
-          description: 'Optional per-run values for the workflow\'s adjustable parameters (see the workflow\'s `inputs` note from action: list — e.g. {"prompt": "a red cat", "seed": 42}). Omitted parameters keep their defaults; seed-type parameters randomize when the workflow marks them 随机.',
+          description: 'Optional per-run values for the workflow\'s adjustable parameters (see the workflow\'s `inputs` note from action: list — e.g. {"prompt": "a red cat", "seed": 42}). Omitted parameters keep their defaults; seed-type parameters randomize when the workflow marks them for randomization.',
         },
       },
       required: ['action'],
@@ -717,7 +723,7 @@ function workflowDefinition(runtime: ComfyUIRuntime, ctx: Context): ToolDefiniti
         const data = value as {
           action: string
           env?: { baseUrl: string; comfyuiDirs: string[] }
-          workflows?: Array<{ id: string; name: string; description: string; skill?: { summary: string; files: number; required: boolean }; parameters?: Array<{ name: string; label?: string; type?: string; default?: string | number | boolean; random?: boolean; numberKind?: 'int' | 'float'; options?: Array<string | number>; upload?: 'image' | 'video' | 'audio' | 'media'; subfolder?: string }> }>
+          workflows?: Array<{ id: string; name: string; description: string; tags?: string[]; skill?: { summary: string; files: number; required: boolean }; parameters?: Array<{ name: string; label?: string; type?: string; role?: 'write' | 'negative'; default?: string | number | boolean; random?: boolean; numberKind?: 'int' | 'float'; options?: Array<string | number>; upload?: 'image' | 'video' | 'audio' | 'media'; subfolder?: string }> }>
           comfyuiWorkflows?: Array<{ name: string; extracted: boolean; derived: Array<{ libraryId: string; name: string }> }>
           loadArea?: { slots: number; loaded: number; items: Array<{ name: string; kind: string; source: string }> }
           result?: RunResult
@@ -731,7 +737,7 @@ function workflowDefinition(runtime: ComfyUIRuntime, ctx: Context): ToolDefiniti
         }
         if (data.action === 'skill') {
           const pack = data.skill
-          if (pack === undefined) return [{ type: 'text', text: `ComfyUI workflow ${data.name ?? data.id} 没有技能包。` }]
+          if (pack === undefined) return [{ type: 'text', text: `ComfyUI workflow ${data.name ?? data.id} has no skill pack.` }]
           // Same framing the host uses for its own skills: a named block, the
           // resource base, then the body verbatim. The reference files stay on
           // disk until the body sends the model after one of them.
@@ -763,9 +769,9 @@ function workflowDefinition(runtime: ComfyUIRuntime, ctx: Context): ToolDefiniti
         if (data.action === 'refresh') {
           const changed = data.changed ?? []
           const changedText = changed.length > 0
-            ? `更新了 ${changed.length} 个参数的 options / 数值声明：${changed.join('、')}`
-            : 'options 与数值声明与最新节点定义一致，没有变化'
-          return [{ type: 'text', text: `ComfyUI workflow ${data.name ?? data.id}：参数快照已刷新（${data.parameterCount ?? 0} 个参数原样保留），${changedText}` }]
+            ? `Updated options or numeric metadata for ${changed.length} parameters: ${changed.join(', ')}`
+            : 'Options and numeric metadata already match the current node definitions'
+          return [{ type: 'text', text: `ComfyUI workflow ${data.name ?? data.id}: refreshed metadata for ${data.parameterCount ?? 0} parameters. ${changedText}` }]
         }
         if (data.action === 'list') {
           const lines: string[] = []
@@ -774,49 +780,50 @@ function workflowDefinition(runtime: ComfyUIRuntime, ctx: Context): ToolDefiniti
             // The model's local-env one-liner: the ComfyUI server address and
             // the user's ComfyUI install dirs, so it never has to ask where
             // files live (TTS-Audio-Suite voice library etc.).
-            lines.push(`ComfyUI 服务器: ${env.baseUrl}；本机 ComfyUI 目录: ${env.comfyuiDirs.length > 0 ? env.comfyuiDirs.join('；') : '未配置（设置页 comfyuiDirs 可填写）'}`)
+            lines.push(`ComfyUI server: ${env.baseUrl}; local ComfyUI directories: ${env.comfyuiDirs.length > 0 ? env.comfyuiDirs.join(', ') : 'not configured (see comfyuiDirs in settings)'}`)
           }
           lines.push(`Saved ComfyUI workflows (${data.workflows?.length ?? 0}):`)
           for (const workflow of data.workflows ?? []) {
             lines.push(`- ${workflow.id} — ${workflow.name}${workflow.description !== '' ? `: ${workflow.description}` : ''}`)
+            if (workflow.tags?.length) lines.push(`  Tags: ${workflow.tags.join(', ')}`)
             const skill = workflow.skill
             if (skill !== undefined) {
-              const extra = skill.files > 1 ? `，另有 ${skill.files - 1} 篇参考文档` : ''
-              lines.push(`  技能包${skill.required ? '（运行前必读）' : ''}: ${skill.summary}${extra} — 运行前先 action: skill { id: "${workflow.id}" }`)
+              const extra = skill.files > 1 ? ` (${skill.files - 1} additional files)` : ''
+              lines.push(`  Skill pack${skill.required ? ' (required before running)' : ''}: ${skill.summary}${extra} — Before running, use action: skill { id: "${workflow.id}" }`)
             }
             // Prompt parameters carry the user's request, so they are marked to
             // be filled from it and their saved default is not printed (a
             // default shown here gets rerun verbatim); every other parameter
             // is listed with its default.
             const params = workflow.parameters ?? []
-            if (params.length > 0) lines.push('  参数（键名用括号前的英文名；未传的参数使用默认值）:')
+            if (params.length > 0) lines.push('  Parameters (use the keys before parentheses; omitted values use their defaults):')
             for (const param of params) {
               const prompt = promptRole(param) === 'write'
               const label = param.label ?? param.name
-              const def = prompt || param.default === undefined ? '' : `，默认 ${typeof param.default === 'string' ? `"${param.default}"` : String(param.default)}`
-              const options = Array.isArray(param.options) && param.options.length > 0 ? `，可选: ${param.options.join(' / ')}` : ''
+              const def = prompt || param.default === undefined ? '' : `, default ${typeof param.default === 'string' ? `"${param.default}"` : String(param.default)}`
+              const options = Array.isArray(param.options) && param.options.length > 0 ? `, options: ${param.options.join(' / ')}` : ''
               const upload = param.upload !== undefined
-                ? `，上传类型: ${param.upload}${param.upload === 'media' ? `（${param.subfolder ?? ''}/，空值=移除该参考位）` : ''}`
+                ? `, upload type: ${param.upload}${param.upload === 'media' ? ` (${param.subfolder ?? ''}/; empty removes this reference)` : ''}`
                 : ''
-              const fill = prompt ? ' — 按用户需求填写，未明确时据需求自行发挥' : ''
-              lines.push(`  ${param.name}(${label}${param.random === true ? '，随机' : ''}${def}${options}${upload})${fill}`)
+              const fill = prompt ? " — Compose from the user's request." : ''
+              lines.push(`  ${param.name}(${label}${param.random === true ? ', randomized' : ''}${def}${options}${upload})${fill}`)
             }
           }
           const loadArea = data.loadArea
           if (loadArea !== undefined && loadArea.slots > 0) {
-            lines.push(`用户加载区（${loadArea.slots} 个加载位，已放入 ${loadArea.loaded} 个素材，未显式传值的加载参数按顺序取用）:`)
+            lines.push(`Load area (${loadArea.loaded} of ${loadArea.slots} slots filled; unspecified loader inputs use these in order):`)
             for (const [index, item] of loadArea.items.entries()) {
-              lines.push(`  ${index + 1}. ${item.name}（${item.kind}）`)
+              lines.push(`  ${index + 1}. ${item.name} (${item.kind})`)
             }
           }
           const comfyui = data.comfyuiWorkflows ?? []
           if (comfyui.length > 0) {
-            lines.push(`ComfyUI 端保存的图工作流（${comfyui.length} 个，UI 图格式，不能直接运行）:`)
+            lines.push(`Saved ComfyUI graphs (${comfyui.length}; extract to run):`)
             for (const workflow of comfyui) {
               if (workflow.extracted) {
-                lines.push(`- ${workflow.name} — 已提取 ${workflow.derived.length} 个运行工作流：${workflow.derived.map((d) => `${d.name}(${d.libraryId})`).join('、')}`)
+                lines.push(`- ${workflow.name} — Extracted ${workflow.derived.length} runnable workflows: ${workflow.derived.map((d) => `${d.name} (${d.libraryId})`).join(', ')}`)
               } else {
-                lines.push(`- ${workflow.name} — 未提取：如需运行，请转告用户先在 ComfyUI 面板里“提取”它（可选择整体/按分量/主流程）`)
+                lines.push(`- ${workflow.name} — Ask the user to extract this graph in the ComfyUI panel before running it.`)
               }
             }
           }
@@ -857,7 +864,7 @@ function workflowDefinition(runtime: ComfyUIRuntime, ctx: Context): ToolDefiniti
             const pack = await runtime.skillPacks.infoFor(workflow).catch(() => undefined)
             if (pack === undefined) return
             packs.set(workflow.id, {
-              summary: pack.summary !== '' ? pack.summary : `${workflow.name} 的使用说明`,
+              summary: pack.summary !== '' ? pack.summary : `Instructions for ${workflow.name}`,
               files: pack.files.length,
               required: pack.required,
             })
@@ -877,16 +884,23 @@ function workflowDefinition(runtime: ComfyUIRuntime, ctx: Context): ToolDefiniti
             loaded: loaded.length,
             items: loaded.map(({ name, kind, source }) => ({ name, kind, source })),
           },
-          workflows: workflows.map(({ id, name, description, parameters, updatedAt }) => ({
-            id,
-            name,
-            description,
-            ...(packs.has(id) ? { skill: packs.get(id)! } : {}),
-            parameters: (parameters ?? []).map(({ name: pname, label, type, default: def, random, numberKind, options, upload }) => {
+          workflows: workflows.map((workflow) => ({
+            id: workflow.id,
+            ...extractedWorkflowText(workflow, 'en'),
+            tags: (workflow.tags ?? []).map((tag) => tagLabel(tag, 'en')),
+            ...(packs.has(workflow.id) ? { skill: packs.get(workflow.id)! } : {}),
+            parameters: (workflow.parameters ?? []).map((param) => {
+              const { name: pname, label, type, default: def, random, numberKind, options, upload, subfolder } = param
+              const role = promptRole(param, workflow.workflow as Workflow)
               // DSH validates tool output as lossless JSON: JSON.stringify drops
               // undefined keys, so omit optional fields instead of passing undefined.
               const entry: Record<string, unknown> = { name: pname }
-              if (label !== undefined) entry.label = label
+              if (label !== undefined) {
+                const display = parameterLabel(label, 'en')
+                entry.label = role === 'negative' && (display === 'Prompt' || display === 'Text') ? 'Negative prompt' : display
+              }
+              if (role !== undefined) entry.role = role
+              if (subfolder !== undefined) entry.subfolder = subfolder
               if (type !== undefined) entry.type = type
               if (def !== undefined) entry.default = def
               if (random !== undefined) entry.random = random
@@ -897,9 +911,9 @@ function workflowDefinition(runtime: ComfyUIRuntime, ctx: Context): ToolDefiniti
               if (upload !== undefined) entry.upload = upload
               return entry
             }),
-            updatedAt,
+            updatedAt: workflow.updatedAt,
           })),
-          comfyuiWorkflows: comfyui.map(({ name, extracted, derived }) => ({ name, extracted, derived })),
+          comfyuiWorkflows: comfyui.map(({ name, extracted, derived }) => ({ name, extracted, derived: derived.map((item) => ({ ...item, name: extractedWorkflowText({ ...item, source: 'comfyui' }, 'en').name })) })),
         }
       }
       const id = args.id
@@ -914,9 +928,8 @@ function workflowDefinition(runtime: ComfyUIRuntime, ctx: Context): ToolDefiniti
         return {
           action: 'get',
           id: saved.id,
-          name: saved.name,
-          description: saved.description,
-          parameters: saved.parameters ?? [],
+          ...extractedWorkflowText(saved, 'en'),
+          parameters: (saved.parameters ?? []).map((param) => ({ ...param, label: parameterLabel(param.label, 'en') })),
           workflow: saved.workflow,
         }
       }
@@ -930,9 +943,9 @@ function workflowDefinition(runtime: ComfyUIRuntime, ctx: Context): ToolDefiniti
         return {
           action: 'skill',
           id: saved.id,
-          name: saved.name,
+          name: extractedWorkflowText(saved, 'en').name,
           skill: {
-            workflowName: pack.value.workflowName,
+            workflowName: extractedWorkflowText(saved, 'en').name,
             summary: pack.value.summary,
             body: pack.value.body,
             resourceBase: pack.value.resourceBase,
@@ -969,7 +982,7 @@ function workflowDefinition(runtime: ComfyUIRuntime, ctx: Context): ToolDefiniti
         return {
           action: 'refresh',
           id: saved.id,
-          name: saved.name,
+          name: extractedWorkflowText(saved, 'en').name,
           parameterCount: parameters.length,
           changed,
         }
@@ -978,7 +991,7 @@ function workflowDefinition(runtime: ComfyUIRuntime, ctx: Context): ToolDefiniti
       // until this session has actually loaded their pack. The reminder in the
       // listing is advisory; this is the part that holds.
       if (saved.requireSkill === true && saved.skillDir !== undefined && !hasReadSkillPack(exec.agent, saved.id)) {
-        throw new Error(`comfyui_workflow: 工作流 "${saved.name}" 标记了运行前必读技能包 — 先调用 action: skill { id: "${saved.id}" } 读完再运行。`)
+        throw new Error(`comfyui_workflow: Workflow "${saved.name}" requires reading its skill pack first. Use action: skill { id: "${saved.id}" } before running.`)
       }
       const config = runtime.getConfig()
       const client = runtime.createClient(await runtime.getApiKey())
@@ -1013,10 +1026,10 @@ function workflowDefinition(runtime: ComfyUIRuntime, ctx: Context): ToolDefiniti
         }
         const jobId = startPromptJob(jobs, runtime, client, { promptId, label: saved.name, subject: 'ComfyUI workflow', waitMs, agent: exec.agent, prompts })
         const background: BackgroundResult = { kind: 'background', jobId, promptId, label: saved.name, notifies: sessionJobs(jobs) }
-        return { action: 'run', id, workflowName: saved.name, background, report: backgroundText('ComfyUI workflow', background) }
+        return { action: 'run', id, workflowName: extractedWorkflowText(saved, 'en').name, background, report: backgroundText('ComfyUI workflow', background) }
       }
       const result = await waitSync(runtime, client, promptId, config, exec.signal, waitMs, { prompts })
-      return { action: 'run', id, workflowName: saved.name, result, report: runResultText('ComfyUI workflow', result) }
+      return { action: 'run', id, workflowName: extractedWorkflowText(saved, 'en').name, result, report: runResultText('ComfyUI workflow', result) }
     },
   }
 }
@@ -1041,7 +1054,7 @@ function skillDefinition(runtime: ComfyUIRuntime): ToolDefinition {
     description: [
       "Read and write one workflow's skill pack: the SKILL.md the agent reads before running that workflow, plus its reference files, scripts, templates and assets.",
       '`action: list` returns the pack listing (files, sub-directories, byte sizes) and its absolute directory.',
-      '`action: read` returns one file (path relative to the pack, e.g. `references/styles.md`); reading `SKILL.md` also satisfies the 必读 gate that blocks `comfyui_workflow action: run` for workflows marked required.',
+      '`action: read` returns one file (path relative to the pack, e.g. `references/styles.md`); reading `SKILL.md` also satisfies the required-reading gate that blocks `comfyui_workflow action: run` for workflows marked required.',
       '`action: write` creates or overwrites one file (`content`); pass `summary` alongside when writing SKILL.md to set the one-line summary the workflow listing shows. `action: append` adds to the end of an existing file instead — the right choice for recording a newly discovered pitfall without rewriting the document.',
       '`action: mkdir` creates a sub-directory, `action: rename` moves a file within the pack, `action: delete` removes one file (SKILL.md cannot be renamed or deleted).',
       '`action: enable` attaches a pack to a workflow that has none (seeding SKILL.md), and `action: require` toggles whether running that workflow demands the pack be read first.',
@@ -1081,18 +1094,18 @@ function skillDefinition(runtime: ComfyUIRuntime): ToolDefinition {
           required?: boolean
         }
         if (data.action === 'read') {
-          return [{ type: 'text', text: `${data.path} (${data.workflowName}):\n${data.content ?? ''}${data.truncated === true ? '\n…（文件过大，已截断）' : ''}` }]
+          return [{ type: 'text', text: `${data.path} (${data.workflowName}):\n${data.content ?? ''}${data.truncated === true ? '\n… (file truncated)' : ''}` }]
         }
         const lines: string[] = []
         if (data.action === 'list') {
-          lines.push(`技能包 ${data.workflowName}（${data.dir}）${data.required === true ? ' — 运行前必读' : ''}`)
-          if (data.summary !== undefined && data.summary !== '') lines.push(`摘要: ${data.summary}`)
+          lines.push(`Skill pack for ${data.workflowName} (${data.dir})${data.required === true ? ' — required before running' : ''}`)
+          if (data.summary !== undefined && data.summary !== '') lines.push(`Summary: ${data.summary}`)
           for (const file of data.files ?? []) lines.push(`  ${file.path} (${file.size} B)`)
           const empty = (data.dirs ?? []).filter((dir) => !(data.files ?? []).some((file) => file.path.startsWith(`${dir}/`)))
-          if (empty.length > 0) lines.push(`  空目录: ${empty.map((dir) => `${dir}/`).join('、')}`)
+          if (empty.length > 0) lines.push(`  Empty directories: ${empty.map((dir) => `${dir}/`).join(', ')}`)
           return [{ type: 'text', text: lines.join('\n') }]
         }
-        lines.push(`技能包 ${data.workflowName} 已更新（${data.action}${data.path !== undefined ? ` ${data.path}` : ''}）`)
+        lines.push(`Updated the skill pack for ${data.workflowName} (${data.action}${data.path !== undefined ? ` ${data.path}` : ''})`)
         for (const file of data.files ?? []) lines.push(`  ${file.path} (${file.size} B)`)
         return [{ type: 'text', text: lines.join('\n') }]
       },
@@ -1116,7 +1129,7 @@ function skillDefinition(runtime: ComfyUIRuntime): ToolDefinition {
 
       const listing = async (label: string, extra?: Record<string, unknown>): Promise<Record<string, unknown>> => {
         const pack = await runtime.skillPacks.info(id)
-        if (pack === undefined) throw new Error(`comfyui_skill: 工作流 "${saved.name}" 没有技能包 — 先用 action: enable 挂一个`)
+        if (pack === undefined) throw new Error(`comfyui_skill: Workflow "${saved.name}" has no skill pack. Use action: enable to create one.`)
         return {
           action: label,
           workflowId: id,
